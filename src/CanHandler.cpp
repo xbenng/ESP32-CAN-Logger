@@ -100,7 +100,7 @@ namespace CAN
                 fs.mkdir(rootdir);
             }
 
-            uint32_t num_files { 0 };
+            uint32_t max_log_num { 0 };
             File root = fs.open(rootdir);
             for (File file = root.openNextFile(); file; file = root.openNextFile())
             {
@@ -113,15 +113,22 @@ namespace CAN
                     Serial.print("  SIZE: ");
                     Serial.println(file.size());
                 }
+                
                 String filename {file.name()};
                 filename.remove(0,String(rootdir).length()+1);  // trim directory off front
-
                 if (filename.startsWith(log_prefix))
-                    num_files++;
+                {
+                    int log_num {filename.substring(String(log_prefix).length(), filename.indexOf('.')).toInt()};
+
+                    if (log_num > max_log_num)
+                    {
+                        max_log_num = log_num;
+                    }
+                }
             }
 
             start_time_ms = millis();
-            String new_file_name {String(rootdir) + "/"+ log_prefix + String(num_files) + ".csv"};
+            String new_file_name {String(rootdir) + "/"+ log_prefix + String(max_log_num + 1) + ".csv"};
             logfile = fs.open(new_file_name, FILE_WRITE);
             tft.println("created file: " + new_file_name);
             started = true;
