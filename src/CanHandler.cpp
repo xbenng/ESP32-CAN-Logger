@@ -84,10 +84,10 @@ namespace CAN
                 char line_buffer[max_line_length];
                 char* line_buffer_ptr = line_buffer;
                 // log
-                line_buffer_ptr += sprintf(line_buffer_ptr, "%d,", start_time_ms - millis());
+                line_buffer_ptr += sprintf(line_buffer_ptr, "%d,", millis() - start_time_ms );
                 line_buffer_ptr += sprintf(line_buffer_ptr, "0x%03X,", frame.MsgID);
                 for (int i = 0; i < frame.FIR.B.DLC; i++) {
-                    line_buffer_ptr += sprintf(line_buffer, "0x%02X,", frame.data.u8[i]);
+                    line_buffer_ptr += sprintf(line_buffer_ptr, "0x%02X,", frame.data.u8[i]);
                 }
                 logfile.println(line_buffer);
                 tft.println(line_buffer);
