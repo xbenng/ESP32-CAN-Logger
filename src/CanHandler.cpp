@@ -11,6 +11,78 @@ extern WROVER_KIT_LCD tft;
 namespace CAN
 {
 
+    
+    class Display
+    {
+    public:
+
+        class ILine
+        {
+        public:
+            virtual uint32_t update();
+        };
+
+        Display(int x_fixed, int y_fixed) :
+            x_fixed{x_fixed},
+            y_fixed{y_fixed}
+        {}
+
+        void register_line(ILine line)
+        {
+            line_list[line_list_count++] = line;
+        }
+
+        void update()
+        {
+            for (int i = 0; i < line_list_count; i++)
+            {
+                line_list[i].update();
+            }
+        }
+    private:
+        int x_fixed;
+        int y_fixed;
+        ILine line_list[50];
+        int line_list_count;
+    };
+
+    class CanMsgDisplayLine : public Display::ILine
+    {
+    public:
+
+
+        CanMsgDisplayLine()
+        {}
+        
+        uint32_t update() override
+        {
+            return 0;
+        }
+
+        bool process_message(CAN_frame_t& frame)
+        {
+            bool assigned_id {false};
+            if (id == -1)
+            {
+                id = frame.MsgID;
+                assigned_id = true;
+            }
+            count++;
+            return assigned_id;
+        }
+
+        int get_id()
+        {
+            return id;
+        }
+
+    private:
+        int count {0};
+        int id {-1};
+
+
+    };
+
     class CanLog
     {
     public:
@@ -41,12 +113,15 @@ namespace CAN
                     Serial.print("  SIZE: ");
                     Serial.println(file.size());
                 }
-                if (String(file.name()).substring(0, String(log_prefix).length()) == log_prefix)
+                String filename {file.name()};
+                filename.remove(0,String(rootdir).length()+1);  // trim directory off front
+
+                if (filename.startsWith(log_prefix))
                     num_files++;
             }
 
             start_time_ms = millis();
-            String new_file_name {String(rootdir) + "/"+ log_prefix + "_" + String(num_files)};
+            String new_file_name {String(rootdir) + "/"+ log_prefix + String(num_files) + ".csv"};
             logfile = fs.open(new_file_name, FILE_WRITE);
             tft.println("created file: " + new_file_name);
             started = true;
@@ -58,7 +133,7 @@ namespace CAN
             started = false;
         }
 
-        void log_frame(CAN_frame_t& frame)
+        void log_message(CAN_frame_t& frame)
         {
             if (started && logfile)
             {
@@ -90,18 +165,42 @@ namespace CAN
                     line_buffer_ptr += sprintf(line_buffer_ptr, "0x%02X,", frame.data.u8[i]);
                 }
                 logfile.println(line_buffer);
-                tft.println(line_buffer);
+                // tft.println(line_buffer);
+                add_message(frame);
             }
         }
 
     private:
-        static constexpr const char* log_prefix{""};
+        static constexpr const char* log_prefix{"log_"};
 
         unsigned long start_time_ms;
         File logfile;
         FS fs;
         bool started { false };
         const char* rootdir;
+
+        CanMsgDisplayLine msg_list[50];
+        int msg_list_cnt {0};
+
+        void add_message(CAN_frame_t& frame)
+        {
+            bool id_exists {false};
+            for (int i = 0; i < msg_list_cnt; i++)
+            {
+                if (msg_list[i].get_id() == frame.MsgID)
+                {
+                    msg_list[i].process_message(frame);
+
+                    id_exists = true;
+                    break;
+                }
+            }
+
+            if (!id_exists)
+            {
+                msg_list[msg_list_cnt++].process_message(frame);
+            }
+        }
     };
     static CanLog log { SD_MMC, "/logs" };
 
@@ -132,9 +231,7 @@ namespace CAN
             // Receive next CAN frame from queue
             if (xQueueReceive(CAN_cfg.rx_queue, &rx_frame, 1 * portTICK_PERIOD_MS) == pdTRUE) 
             {
-
-
-                log.log_frame(rx_frame);
+                log.log_message(rx_frame);
             }
         }
     }

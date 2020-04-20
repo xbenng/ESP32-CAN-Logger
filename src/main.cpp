@@ -74,8 +74,11 @@ void setup() {
   tft.setCursor(0, 0);
   tft.setTextColor(WROVER_WHITE);
   tft.setTextSize(1);
-  tft.print("> ");
 
+  constexpr const char* shell_prefix {"> "};
+  tft.print(shell_prefix);
+  tft.setupScrollArea(40, 40); 
+  
   CAN::setup();
 
 
