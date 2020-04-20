@@ -19,7 +19,7 @@ namespace CAN
         class ILine
         {
         public:
-            virtual uint32_t update();
+            virtual uint32_t draw(WROVER_KIT_LCD& display);  // draws and returns how many pixel rows used
         };
 
         Display(int x_fixed, int y_fixed) :
@@ -27,24 +27,28 @@ namespace CAN
             y_fixed{y_fixed}
         {}
 
-        void register_line(ILine line)
+        void register_line(ILine& line)
         {
-            line_list[line_list_count++] = line;
+            line_list[line_list_count++] = &line;
         }
 
-        void update()
-        {
+        void draw_all()
+        {            
+            int y_current = y_fixed;
             for (int i = 0; i < line_list_count; i++)
             {
-                line_list[i].update();
+                tft.setCursor(x_fixed, y_current);
+                y_current += line_list[i]->draw(tft);
             }
         }
     private:
         int x_fixed;
         int y_fixed;
-        ILine line_list[50];
+        ILine* line_list[50];
         int line_list_count;
     };
+
+    static Display display {0,50};
 
     class CanMsgDisplayLine : public Display::ILine
     {
@@ -54,9 +58,10 @@ namespace CAN
         CanMsgDisplayLine()
         {}
         
-        uint32_t update() override
+        uint32_t draw(WROVER_KIT_LCD& display) override
         {
-            return 0;
+            display.print(id);
+            return 10;
         }
 
         bool process_message(CAN_frame_t& frame)
@@ -66,8 +71,12 @@ namespace CAN
             {
                 id = frame.MsgID;
                 assigned_id = true;
+                display.register_line(*this);
             }
+
             count++;
+            last_dlc = frame.FIR.B.DLC;
+            memcpy(last_data, frame.data.u8, last_dlc);
             return assigned_id;
         }
 
@@ -79,6 +88,8 @@ namespace CAN
     private:
         int count {0};
         int id {-1};
+        uint8_t last_dlc;
+        uint8_t last_data[8];
 
 
     };
@@ -95,43 +106,47 @@ namespace CAN
 
         void start()
         {
-            if (!fs.exists(rootdir))
+            if (!started)
             {
-                fs.mkdir(rootdir);
-            }
-
-            uint32_t max_log_num { 0 };
-            File root = fs.open(rootdir);
-            for (File file = root.openNextFile(); file; file = root.openNextFile())
-            {
-                if(file.isDirectory()){
-                    Serial.print("  DIR : ");
-                    Serial.println(file.name());
-                } else {
-                    Serial.print("  FILE: ");
-                    Serial.print(file.name());
-                    Serial.print("  SIZE: ");
-                    Serial.println(file.size());
-                }
-                
-                String filename {file.name()};
-                filename.remove(0,String(rootdir).length()+1);  // trim directory off front
-                if (filename.startsWith(log_prefix))
+                // make directory if it doesn't exist
+                if (!fs.exists(rootdir))
                 {
-                    int log_num {filename.substring(String(log_prefix).length(), filename.indexOf('.')).toInt()};
+                    fs.mkdir(rootdir);
+                }
 
-                    if (log_num > max_log_num)
+                uint32_t max_log_num { 0 };
+                File root = fs.open(rootdir);
+                for (File file = root.openNextFile(); file; file = root.openNextFile())  // search each existing file.
+                {
+                    if(file.isDirectory()){
+                        Serial.print("  DIR : ");
+                        Serial.println(file.name());
+                    } else {
+                        Serial.print("  FILE: ");
+                        Serial.print(file.name());
+                        Serial.print("  SIZE: ");
+                        Serial.println(file.size());
+                    }
+
+                    String filename {file.name()};
+                    filename.remove(0,String(rootdir).length()+1);  // trim directory off front
+                    if (filename.startsWith(log_prefix))
                     {
-                        max_log_num = log_num;
+                        int log_num {filename.substring(String(log_prefix).length(), filename.indexOf('.')).toInt()};
+
+                        if (log_num > max_log_num)
+                        {
+                            max_log_num = log_num;
+                        }
                     }
                 }
-            }
 
-            start_time_ms = millis();
-            String new_file_name {String(rootdir) + "/"+ log_prefix + String(max_log_num + 1) + ".csv"};
-            logfile = fs.open(new_file_name, FILE_WRITE);
-            tft.println("created file: " + new_file_name);
-            started = true;
+                start_time_ms = millis();
+                String new_file_name {String(rootdir) + "/"+ log_prefix + String(max_log_num + 1) + ".csv"};
+                logfile = fs.open(new_file_name, FILE_WRITE);
+                tft.println("created file: " + new_file_name);
+                started = true;
+            }
         }
 
         void stop()
@@ -211,10 +226,6 @@ namespace CAN
     };
     static CanLog log { SD_MMC, "/logs" };
 
-    static unsigned long previousMillis = 0;   // will store last time a CAN Message was send
-    static const int interval = 1000;          // interval at which send CAN Messages (milliseconds)
-    static const int rx_queue_size = 10;       // Receive Queue size
-
     duk_ret_t start_log(duk_context *ctx)
     {
         log.start();
@@ -233,8 +244,6 @@ namespace CAN
 
         for (;;)
         {
-            unsigned long currentMillis = millis();
-
             // Receive next CAN frame from queue
             if (xQueueReceive(CAN_cfg.rx_queue, &rx_frame, 1 * portTICK_PERIOD_MS) == pdTRUE) 
             {
@@ -243,8 +252,28 @@ namespace CAN
         }
     }
 
+    static void update_display(void * pvParameters)
+    {
+        TickType_t xLastWakeTime;
+        const TickType_t xFrequency = 30;
+
+        // Initialise the xLastWakeTime variable with the current time.
+        xLastWakeTime = xTaskGetTickCount();
+
+        for( ;; )
+        {
+            // Wait for the next cycle.
+            vTaskDelayUntil( &xLastWakeTime, xFrequency );
+
+            // Perform action here.
+            display.draw_all();
+        }
+    }
+
     void setup()
     {
+        constexpr int rx_queue_size = 10;       // Receive Queue size
+
         //setup can
         CAN_cfg.speed = CAN_SPEED_125KBPS;
         CAN_cfg.tx_pin_id = GPIO_NUM_26;
@@ -255,6 +284,7 @@ namespace CAN
         ESP32Can.CANInit();
 
         xTaskCreate(rx_can, "rx_can", 2048, 0, 2, NULL);
+        xTaskCreate(update_display, "update_display", 2048, 0, 5, NULL);
     }
 
 }
