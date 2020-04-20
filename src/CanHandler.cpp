@@ -80,14 +80,17 @@ namespace CAN
                 Serial.printf("\n");
                 }
                 
+                constexpr int max_line_length { 32+5+(4*8) };
+                char line_buffer[max_line_length];
+                char* line_buffer_ptr = line_buffer;
                 // log
-                logfile.printf("%d,", start_time_ms - millis());
-                logfile.printf("0x%03X,", frame.MsgID);
-
+                line_buffer_ptr += sprintf(line_buffer_ptr, "%d,", start_time_ms - millis());
+                line_buffer_ptr += sprintf(line_buffer_ptr, "0x%03X,", frame.MsgID);
                 for (int i = 0; i < frame.FIR.B.DLC; i++) {
-                    logfile.printf("0x%02X,", frame.data.u8[i]);
+                    line_buffer_ptr += sprintf(line_buffer, "0x%02X,", frame.data.u8[i]);
                 }
-                logfile.printf("\n");
+                logfile.println(line_buffer);
+                tft.println(line_buffer);
             }
         }
 

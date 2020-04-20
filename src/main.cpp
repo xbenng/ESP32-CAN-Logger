@@ -114,15 +114,6 @@ void setup() {
 String expression;
 
 void loop(void) {
-  static bool init {false};
-  if (!init)
-  {
-    Serial.print("Main Loop: priority = ");
-    Serial.println(uxTaskPriorityGet(NULL));
-    init = true;
-  }
-
-  // rx_can();
 
   if (Serial.available() > 0)
   {
