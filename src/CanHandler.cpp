@@ -60,8 +60,16 @@ namespace CAN
         
         uint32_t draw(WROVER_KIT_LCD& display) override
         {
-            display.print(id);
-            return 10;
+            constexpr int line_height {18};
+
+            int x_original {display.getCursorX()};
+            int y_original {display.getCursorY()};
+            display.fillRect(x_original, y_original, display.width(), line_height, WROVER_BLACK);
+            display.printf("ID: 0x%03X  Count: %d\n", id, count);
+            for (int i = 0; i < last_dlc; i++) {
+                display.printf("0x%02X ", last_data[i]);
+            }
+            return line_height;
         }
 
         bool process_message(CAN_frame_t& frame)
@@ -71,7 +79,6 @@ namespace CAN
             {
                 id = frame.MsgID;
                 assigned_id = true;
-                display.register_line(*this);
             }
 
             count++;
@@ -159,35 +166,25 @@ namespace CAN
         {
             if (started && logfile)
             {
-                if (frame.FIR.B.FF == CAN_frame_std) {
-                Serial.printf("New standard frame");
-                }
-                else {
-                Serial.printf("New extended frame");
-                }
-
-                if (frame.FIR.B.RTR == CAN_RTR) {
-                Serial.printf(" RTR from 0x%08X, DLC %d\r\n", frame.MsgID,  frame.FIR.B.DLC);
-                }
-                else {
-                Serial.printf(" from 0x%08X, DLC %d, Data ", frame.MsgID,  frame.FIR.B.DLC);
-                for (int i = 0; i < frame.FIR.B.DLC; i++) {
-                    Serial.printf("0x%02X ", frame.data.u8[i]);
-                }
-                Serial.printf("\n");
-                }
                 
                 constexpr int max_line_length { 32+5+(4*8) };
                 char line_buffer[max_line_length];
                 char* line_buffer_ptr = line_buffer;
                 // log
-                line_buffer_ptr += sprintf(line_buffer_ptr, "%d,", millis() - start_time_ms );
+                line_buffer_ptr += sprintf(line_buffer_ptr, "%.3f,", (frame.time_us / 1000.0f) - start_time_ms);
                 line_buffer_ptr += sprintf(line_buffer_ptr, "0x%03X,", frame.MsgID);
                 for (int i = 0; i < frame.FIR.B.DLC; i++) {
                     line_buffer_ptr += sprintf(line_buffer_ptr, "0x%02X,", frame.data.u8[i]);
                 }
-                logfile.println(line_buffer);
-                // tft.println(line_buffer);
+                log_flush_count += logfile.println(line_buffer);
+
+                constexpr int flush_threshold {max_line_length * 20};
+                if (log_flush_count > flush_threshold)
+                {
+                    logfile.flush();
+                    log_flush_count = 0;
+                }
+
                 add_message(frame);
             }
         }
@@ -200,6 +197,7 @@ namespace CAN
         FS fs;
         bool started { false };
         const char* rootdir;
+        int log_flush_count {0};
 
         CanMsgDisplayLine msg_list[50];
         int msg_list_cnt {0};
@@ -220,6 +218,7 @@ namespace CAN
 
             if (!id_exists)
             {
+                display.register_line(msg_list[msg_list_cnt]);
                 msg_list[msg_list_cnt++].process_message(frame);
             }
         }
@@ -245,7 +244,7 @@ namespace CAN
         for (;;)
         {
             // Receive next CAN frame from queue
-            if (xQueueReceive(CAN_cfg.rx_queue, &rx_frame, 1 * portTICK_PERIOD_MS) == pdTRUE) 
+            if (xQueueReceive(CAN_cfg.rx_queue, &rx_frame, 4 * portTICK_PERIOD_MS) == pdTRUE) 
             {
                 log.log_message(rx_frame);
             }
@@ -255,7 +254,7 @@ namespace CAN
     static void update_display(void * pvParameters)
     {
         TickType_t xLastWakeTime;
-        const TickType_t xFrequency = 30;
+        const TickType_t xFrequency = portTICK_RATE_MS * 100;
 
         // Initialise the xLastWakeTime variable with the current time.
         xLastWakeTime = xTaskGetTickCount();
@@ -272,10 +271,10 @@ namespace CAN
 
     void setup()
     {
-        constexpr int rx_queue_size = 10;       // Receive Queue size
+        constexpr int rx_queue_size = 25;       // Receive Queue size
 
         //setup can
-        CAN_cfg.speed = CAN_SPEED_125KBPS;
+        CAN_cfg.speed = CAN_SPEED_1000KBPS;
         CAN_cfg.tx_pin_id = GPIO_NUM_26;
         CAN_cfg.rx_pin_id = GPIO_NUM_27;
         CAN_cfg.rx_queue = xQueueCreate(rx_queue_size, sizeof(CAN_frame_t));
@@ -283,8 +282,8 @@ namespace CAN
         // Init CAN Module
         ESP32Can.CANInit();
 
-        xTaskCreate(rx_can, "rx_can", 2048, 0, 2, NULL);
-        xTaskCreate(update_display, "update_display", 2048, 0, 5, NULL);
+        xTaskCreate(rx_can, "rx_can", 4096, 0, 2, NULL);
+        xTaskCreatePinnedToCore(update_display, "update_display", 2048, 0, 10, NULL, 0);
     }
 
 }
