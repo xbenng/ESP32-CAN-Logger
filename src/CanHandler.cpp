@@ -4,6 +4,7 @@
 #include "CAN_config.h"
 #include "SD_MMC.h"
 #include "WROVER_KIT_LCD.h"
+#include "Display.h"
 
 CAN_device_t CAN_cfg;               // CAN Config
 extern WROVER_KIT_LCD tft;
@@ -12,7 +13,7 @@ namespace CAN
 {
 
     
-    class Display
+    class LineDisplay
     {
     public:
 
@@ -22,7 +23,7 @@ namespace CAN
             virtual uint32_t draw(WROVER_KIT_LCD& display);  // draws and returns how many pixel rows used
         };
 
-        Display(int x_fixed, int y_fixed) :
+        LineDisplay(int x_fixed, int y_fixed) :
             x_fixed{x_fixed},
             y_fixed{y_fixed}
         {}
@@ -34,11 +35,19 @@ namespace CAN
 
         void draw_all()
         {            
-            int y_current = y_fixed;
-            for (int i = 0; i < line_list_count; i++)
+            SemaphoreHandle_t& display_lock { Display::get_lock() };
+            if (display_lock != NULL)
             {
-                tft.setCursor(x_fixed, y_current);
-                y_current += line_list[i]->draw(tft);
+                if (xSemaphoreTake( display_lock, ( TickType_t ) 10 ) == pdTRUE)
+                {
+                    int y_current = y_fixed;
+                    for (int i = 0; i < line_list_count; i++)
+                    {
+                        tft.setCursor(x_fixed, y_current);
+                        y_current += line_list[i]->draw(tft);
+                    }
+                    xSemaphoreGive( display_lock );
+                }
             }
         }
     private:
@@ -48,19 +57,19 @@ namespace CAN
         int line_list_count;
     };
 
-    static Display display {0,50};
+    static LineDisplay display {0,50};
 
-    class CanMsgDisplayLine : public Display::ILine
+    class CanMsgLine : public LineDisplay::ILine
     {
     public:
 
 
-        CanMsgDisplayLine()
+        CanMsgLine()
         {}
         
         uint32_t draw(WROVER_KIT_LCD& display) override
         {
-            constexpr int line_height {18};
+            constexpr int line_height {20};
 
             int x_original {display.getCursorX()};
             int y_original {display.getCursorY()};
@@ -100,6 +109,29 @@ namespace CAN
 
 
     };
+
+    CanMsgLine msg_list[50];
+    int msg_list_cnt {0};
+    void add_message(CAN_frame_t& frame)
+    {
+        bool id_exists {false};
+        for (int i = 0; i < msg_list_cnt; i++)
+        {
+            if (msg_list[i].get_id() == frame.MsgID)
+            {
+                msg_list[i].process_message(frame);
+
+                id_exists = true;
+                break;
+            }
+        }
+
+        if (!id_exists)
+        {
+            display.register_line(msg_list[msg_list_cnt]);
+            msg_list[msg_list_cnt++].process_message(frame);
+        }
+    }
 
     class CanLog
     {
@@ -181,7 +213,7 @@ namespace CAN
                 constexpr int flush_threshold {max_line_length * 20};
                 if (log_flush_count > flush_threshold)
                 {
-                    logfile.flush();
+                    // logfile.flush();
                     log_flush_count = 0;
                 }
 
@@ -199,42 +231,18 @@ namespace CAN
         const char* rootdir;
         int log_flush_count {0};
 
-        CanMsgDisplayLine msg_list[50];
-        int msg_list_cnt {0};
 
-        void add_message(CAN_frame_t& frame)
-        {
-            bool id_exists {false};
-            for (int i = 0; i < msg_list_cnt; i++)
-            {
-                if (msg_list[i].get_id() == frame.MsgID)
-                {
-                    msg_list[i].process_message(frame);
-
-                    id_exists = true;
-                    break;
-                }
-            }
-
-            if (!id_exists)
-            {
-                display.register_line(msg_list[msg_list_cnt]);
-                msg_list[msg_list_cnt++].process_message(frame);
-            }
-        }
     };
     static CanLog log { SD_MMC, "/logs" };
 
-    duk_ret_t start_log(duk_context *ctx)
+    void start_log()
     {
         log.start();
-        return 0;
     }
     
-    duk_ret_t stop_log(duk_context *ctx)
+    void stop_log()
     {
         log.stop();
-        return 0;
     }
 
     static void rx_can(void * pvParameters)
@@ -263,7 +271,6 @@ namespace CAN
         {
             // Wait for the next cycle.
             vTaskDelayUntil( &xLastWakeTime, xFrequency );
-
             // Perform action here.
             display.draw_all();
         }

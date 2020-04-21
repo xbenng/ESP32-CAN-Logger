@@ -14,7 +14,6 @@
  ****************************************************/
 
 
-#include "WROVER_KIT_LCD.h"
 
 #include "duktape.h"
 
@@ -24,14 +23,12 @@
 #include "SPIFFS.h"
 #include "SD_MMC.h"
 
+#include "DukBindings.h"
+#include "Display.h"
 
 static void my_fatal(void *udata, const char *msg);
 
-WROVER_KIT_LCD tft;
 static duk_context *ctx = duk_create_heap(NULL, NULL, NULL, NULL, my_fatal);
-
-
-
 
 static void my_fatal(void *udata, const char *msg) 
 {
@@ -47,40 +44,18 @@ static void my_fatal(void *udata, const char *msg)
     // ctx = duk_create_heap(NULL, NULL, NULL, NULL, my_fatal);
 }
 
-static duk_ret_t native_print(duk_context *ctx) {
-  Serial.println(duk_to_string(ctx, 0));
-  tft.println(duk_to_string(ctx, 0));
-  return 0;  /* no return value (= undefined) */
-}
 
 
 
 void setup() {
-  duk_push_c_function(ctx, native_print, 1 /*nargs*/);
-  duk_put_global_string(ctx, "print");
 
-  duk_push_c_function(ctx, CAN::start_log, 0 /*nargs*/);
-  duk_put_global_string(ctx, "start_log");
-
-  duk_push_c_function(ctx, CAN::stop_log, 0 /*nargs*/);
-  duk_put_global_string(ctx, "stop_log");
-
+  DukBindings::setup(ctx);
 
   Serial.begin(115200);
-  tft.begin();
 
-  tft.fillScreen(WROVER_BLACK);
-  tft.setRotation(0);
-  tft.setCursor(0, 0);
-  tft.setTextColor(WROVER_WHITE);
-  tft.setTextSize(1);
-
-  constexpr const char* shell_prefix {"> "};
-  tft.print(shell_prefix);
-  tft.setupScrollArea(40, 40); 
   
   CAN::setup();
-
+  Display::setup();
 
   // setup sd card
   if(!SD_MMC.begin()){
@@ -116,46 +91,84 @@ void setup() {
 
 String expression;
 
+
+
 void loop(void) {
+  static int x_current {0};
+  static int y_current {0};
 
-  if (Serial.available() > 0)
-  {
-    char data { static_cast<char>(Serial.read()) };
-    
-    Serial.print(data);
 
-    if (data == '\n')
+    if (Serial.available() > 0)
     {
-      tft.print(data);
+      SemaphoreHandle_t& display_lock { Display::get_lock() };
 
-      Serial.println("evaluating: " + expression);
-      // expression = "try {" + expression + "} catch(err) {print(err.message)}";
-      if (duk_peval_string_noresult(ctx, expression.c_str()))
+      if (display_lock != NULL)
       {
-        Serial.println("eval unsuccessful");
-        tft.println("eval unsuccessful");   
+        if (xSemaphoreTake( display_lock, ( TickType_t ) 10 ) == pdTRUE)
+        {
+        tft.setCursor(x_current, y_current);
+
+        char data { static_cast<char>(Serial.read()) };
+        
+        Serial.print(data);
+
+
+        if (data == '\b')
+        {
+          constexpr int char_width {6};
+          constexpr int char_height {8};
+          // backspace
+          if (expression.length() > 0)
+          {
+            expression.remove(expression.length() - 1);
+            int x {tft.getCursorX()};
+            int y {tft.getCursorY()};
+            if (x == 0)
+            {
+              // reverse wrap
+              tft.setCursor(tft.width() - char_width, y - char_height);
+            }
+            else
+            {
+              tft.setCursor(x - char_width, y);
+            }
+
+            tft.fillRect(tft.getCursorX(), tft.getCursorY(), char_width, char_height, WROVER_BLACK);
+          }
+
+        }
+        else
+        {
+          tft.print(data);
+
+          if (data == '\n')
+          {
+            tft.print(data);
+
+            Serial.println("evaluating: " + expression);
+            // expression = "try {" + expression + "} catch(err) {print(err.message)}";
+            if (duk_peval_string_noresult(ctx, expression.c_str()))
+            {
+              Serial.println("eval unsuccessful");
+              tft.println("eval unsuccessful");   
+            }
+            
+            expression = "";
+            tft.print("> ");
+
+          }
+          else
+          {
+            expression.concat(data);
+          }
+          
+        }
+        
+        x_current = tft.getCursorX();
+        y_current = tft.getCursorY();
+        xSemaphoreGive( display_lock );
       }
-      
-      expression = "";
-      tft.print("> ");
 
     }
-    else if (data == '\b')
-    {
-      // backspace
-      expression.remove(expression.length() - 1);
-      if(tft.getCursorX() > 12)
-      {
-      tft.setCursor(tft.getCursorX() - 6, tft.getCursorY());
-      tft.fillRect(tft.getCursorX(), tft.getCursorY(), 6, 8, WROVER_BLACK);
-      }
-
-    }
-    else
-    {
-      tft.print(data);
-      expression.concat(data);
-    }
-    
   }
 }
