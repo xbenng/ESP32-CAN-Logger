@@ -190,8 +190,13 @@ namespace CAN
 
         void stop()
         {
-            logfile.close();
-            started = false;
+            if (started)
+            {
+                // logfile.flush();
+                tft.println("stopped logging");
+                logfile.close();
+                started = false;
+            }
         }
 
         void log_message(CAN_frame_t& frame)
@@ -221,6 +226,11 @@ namespace CAN
             }
         }
 
+        bool is_logging()
+        {
+            return started;
+        }
+
     private:
         static constexpr const char* log_prefix{"log_"};
 
@@ -244,6 +254,18 @@ namespace CAN
     {
         log.stop();
     }
+
+    bool is_logging()
+    {
+        return log.is_logging();
+    }
+
+    class ITrigger
+    {
+    public:
+        virtual bool is_triggered() = 0;
+        virtual String get_message() = 0;
+    };
 
     static void rx_can(void * pvParameters)
     {
