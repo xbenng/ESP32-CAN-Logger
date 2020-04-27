@@ -45,7 +45,9 @@ static void my_fatal(void *udata, const char *msg)
 }
 
 
-
+constexpr int pin_5v_sense {34};
+constexpr int pin_button {35};
+constexpr int voltage_threshold {3000};
 
 void setup() {
 
@@ -87,6 +89,9 @@ void setup() {
 
   Web::setup();
 
+  pinMode(pin_5v_sense, INPUT);
+  pinMode(pin_button, INPUT);
+
 }
 
 String expression;
@@ -97,26 +102,52 @@ void loop(void) {
   static int x_current {0};
   static int y_current {0};
 
+  constexpr int char_width {6};
+  constexpr int char_height {8};
 
-    if (Serial.available() > 0)
+  Serial.println(digitalRead(pin_button));
+
+  if (analogRead(pin_5v_sense) < voltage_threshold)
+  {
+    CAN::stop_log();
+  }
+
+  static int button_last_time {0};
+
+  if (!digitalRead(pin_button))
+  {
+    if (millis() - button_last_time > 200)
     {
-      SemaphoreHandle_t& display_lock { Display::get_lock() };
-
-      if (display_lock != NULL)
+      button_last_time = millis();
+      if (CAN::is_logging())
       {
-        if (xSemaphoreTake( display_lock, ( TickType_t ) 10 ) == pdTRUE)
-        {
-        tft.setCursor(x_current, y_current);
+        CAN::stop_log();
+      }
+      else
+      {
+        CAN::start_log();
+      }    
+    }
+  }
 
-        char data { static_cast<char>(Serial.read()) };
-        
-        Serial.print(data);
+  if (Serial.available() > 0)
+  {
+    SemaphoreHandle_t& display_lock { Display::get_lock() };
+
+    if (display_lock != NULL)
+    {
+      if (xSemaphoreTake( display_lock, ( TickType_t ) 10 ) == pdTRUE)
+      {
+      tft.setCursor(x_current, y_current);
+
+      char data { static_cast<char>(Serial.read()) };
+      
+      Serial.print(data);
 
 
         if (data == '\b')
         {
-          constexpr int char_width {6};
-          constexpr int char_height {8};
+
           // backspace
           if (expression.length() > 0)
           {
@@ -139,12 +170,22 @@ void loop(void) {
         }
         else
         {
+          int16_t bound_x;
+          int16_t bound_y;
+          uint16_t bound_w;
+          uint16_t bound_h;
+          tft.getTextBounds(String(data).c_str(), tft.getCursorX(), tft.getCursorY(), &bound_x, &bound_y, &bound_w, &bound_h);
+          if (bound_y >= 40)
+          {
+            // tft.scrollTo(char_height);
+            // tft.fillRect(tft.getCursorX(), tft.getCursorY(), tft.width(), char_height, WROVER_BLACK);
+
+            // tft.setCursor(0,32);
+          }
           tft.print(data);
 
           if (data == '\n')
           {
-            tft.print(data);
-
             Serial.println("evaluating: " + expression);
             // expression = "try {" + expression + "} catch(err) {print(err.message)}";
             if (duk_peval_string_noresult(ctx, expression.c_str()))
@@ -155,20 +196,19 @@ void loop(void) {
             
             expression = "";
             tft.print("> ");
-
           }
           else
           {
             expression.concat(data);
           }
-          
         }
         
         x_current = tft.getCursorX();
         y_current = tft.getCursorY();
         xSemaphoreGive( display_lock );
       }
-
     }
   }
+
+
 }
